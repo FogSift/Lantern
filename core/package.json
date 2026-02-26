@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "clipboardy": "^5.3.1",
+    "copy-paste": "^2.2.0"
+  }
+}

@@ -1,15 +1,26 @@
 #!/bin/bash
-# 1. Save the input to a temporary markdown file
-cat > morning_briefing_temp.md
+DATE=$(date +%Y-%m-%d)
+ARCHIVE_FILE="archive/briefing-${DATE}.md"
 
-# 2. Run your existing verified bridge
-./scripts/substack-push.sh morning_briefing_temp.md
+echo "========================================"
+echo "🏮 FOGSIFT DELIVERY: INGEST & PUBLISH"
+echo "========================================"
+echo "Paste your final FogSift Digest below."
+echo "Press Ctrl+D when finished."
+echo "----------------------------------------"
 
-# 3. Open Substack and automate the paste
-# Adjust the delay if your browser takes longer to load the editor
+# 1. Capture output and save directly to archive
+cat > "$ARCHIVE_FILE"
+
+echo -e "\n[ FogSift ] Signal archived to $ARCHIVE_FILE"
+
+# 2. Trigger the Substack Push
+./scripts/substack-push.sh "$ARCHIVE_FILE"
+
+# 3. Automate the Paste
+echo "[ FogSift ] Commencing automated insertion..."
 osascript -e 'tell application "Google Chrome" to activate' \
-          -e 'tell application "Google Chrome" to open location "https://substack.com/publish/post/new"' \
-          -e 'delay 5' \
+          -e 'delay 3' \
           -e 'tell application "System Events" to keystroke "v" using command down'
 
-echo "Lantern Pipeline Complete: Content pushed to Substack."
+echo "[ FogSift ] Lantern Pipeline Complete."

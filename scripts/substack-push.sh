@@ -24,4 +24,4 @@ echo "========================================"
 echo "🏮 FOGSIFT BRIDGE: RESTORED & STABLE"
 echo "========================================"
 echo "[ FogSift ] Content is in your clipboard as Rich Text."
-open "https://fogsift.substack.com/publish/post"
+

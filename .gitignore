@@ -1,5 +1,9 @@
-.venv/
-__pycache__/
-transmissions/raw-*.txt
+# Lantern Infrastructure Silence
 node_modules/
-core/node_modules/
+transmissions/*.md
+transmissions/*.clean
+logs/*.log
+core/*.sqlite
+archive/*.md
+.DS_Store
+dashboard/.exchange/*.json

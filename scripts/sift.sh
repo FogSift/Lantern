@@ -1,25 +1,46 @@
 #!/bin/bash
-# sift.sh - Processes raw transmissions using local llama.cpp
+# Headless Sifter v0.0.2 (Target Acquisition Edition)
 
-# Pointing to the new CMake build location
-BINARY=~/Code/llama.cpp/build/bin/llama-cli
-MODEL=~/Code/llama.cpp/qwen2.5-coder-7b-instruct-q4_k_m.gguf
-DATE=$(date +%Y-%m-%d_%H%M)
-INPUT_FILE=$(ls -1t transmissions/raw-*.md | head -n 1)
-OUTPUT_FILE="archive/briefing-${DATE}.md"
+TARGET_URL=$1
+PROJECT_ROOT=$(pwd)
 
-# Fallback for older binary names if needed
-if [ ! -f "$BINARY" ]; then BINARY=~/Code/llama.cpp/build/bin/main; fi
+if [ -n "$TARGET_URL" ]; then
+    # MANUAL TARGET MODE: Trigger Firecrawl Docker
+    RAW_FILE="transmissions/raw-targeted-$(date +%Y-%m-%d_%H%M%S).md"
+    curl -s -X POST http://localhost:3002/v1/scrape \
+        -H "Content-Type: application/json" \
+        -d "{\"url\": \"$TARGET_URL\", \"formats\": [\"markdown\"]}" | \
+        python3 -c "import sys, json; print(json.load(sys.stdin).get('data', {}).get('markdown', ''))" > "$RAW_FILE"
+else
+    # AUTONOMOUS MODE: Grab the latest sweep
+    RAW_FILE=$(ls -1t transmissions/raw-*.md 2>/dev/null | head -n 1)
+fi
 
-echo "========================================"
-echo "🏮 FOGSIFT SIFTER"
-echo "Processing: $INPUT_FILE"
-echo "========================================"
+if [ ! -s "$RAW_FILE" ]; then
+    echo "!! ERROR: Signal acquisition failed or file is empty."
+    exit 1
+fi
 
-# Run local inference with Qwen 2.5
-$BINARY -m "$MODEL" \
-  -p "<|im_start|>system\n$(cat system_instructions.md)<|im_end|>\n<|im_start|>user\nSift through this raw data and generate the morning briefing:\n$(cat "$INPUT_FILE")<|im_end|>\n<|im_start|>assistant" \
-  -n 2048 --temp 0.2 -ngl 99 > "$OUTPUT_FILE"
+CLEAN_FILE="${RAW_FILE}.clean"
+OUTPUT_FILE="archive/briefing-$(date +%Y-%m-%d_%H%M%S).md"
 
-echo "[ FogSift ] Signal processed and archived to $OUTPUT_FILE"
-./scripts/lantern-ingest.sh "$OUTPUT_FILE"
+# Purification
+grep -vEi "advertisement|privacy policy|copyright|terms of service|sign in|subscribe|all rights reserved|cookie" "$RAW_FILE" | \
+tr -s ' ' | head -c 3000 > "$CLEAN_FILE"
+
+# API Request
+curl -s -N -X POST http://localhost:8080/completion \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"prompt\": \"### INSTRUCTIONS\nYou are the FogSift Lead Analyst. Sift through this news once. Provide a concise summary and STOP. Do not repeat facts.\n\n### DATA\n$(cat "$CLEAN_FILE" | tr -d '\"' | tr -d '\n')\n\n### BRIEFING\",
+    \"stream\": true,
+    \"n_predict\": 800,
+    \"temperature\": 0.85,
+    \"repeat_penalty\": 1.2,
+    \"presence_penalty\": 0.1,
+    \"stop\": [\"###\", \"DATA\", \"INSTRUCTIONS\"]
+  }" | while read -r line; do
+    if [[ "$line" == data:* ]]; then
+        echo "$line" | sed 's/^data: //' | python3 -c "import sys, json; print(json.loads(sys.stdin.read()).get('content', ''), end='', flush=True)" 2>/dev/null
+    fi
+done | tee "$OUTPUT_FILE"

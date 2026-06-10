@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LANTERN | Local News Intelligence</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+        * { box-sizing: border-box; }
+        body { font-family: 'JetBrains Mono', monospace; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+        /* Screen transitions */
+        .screen { display: none; }
+        .screen.active { display: flex; }
+
+        /* Card expand animation */
+        .card-content { max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out, padding 0.3s ease-out; }
+        .card.expanded .card-content { max-height: 2000px; transition: max-height 0.5s ease-in; }
+        .card.expanded .card-preview { display: none; }
+        .card .expand-icon { transition: transform 0.2s; }
+        .card.expanded .expand-icon { transform: rotate(180deg); }
+
+        /* Markdown content styling */
+        .md-content h1, .md-content h2, .md-content h3 { color: #fff; font-weight: 700; margin-top: 1.2rem; margin-bottom: 0.4rem; border-bottom: 1px solid #064e3b; padding-bottom: 4px; }
+        .md-content h1 { font-size: 1.1rem; }
+        .md-content h2 { font-size: 1rem; }
+        .md-content h3 { font-size: 0.9rem; }
+        .md-content p { margin-bottom: 0.75rem; color: #d1d5db; line-height: 1.7; }
+        .md-content ul { list-style-type: square; padding-left: 1.5rem; margin-bottom: 0.75rem; color: #a7f3d0; }
+        .md-content strong { color: #fff; background-color: rgba(4, 120, 87, 0.3); padding: 0 4px; }
+        .md-content a { color: #34d399; text-decoration: underline; }
+
+        /* Leaflet overrides */
+        .marker-cluster-small, .marker-cluster-medium, .marker-cluster-large {
+            background-color: rgba(16, 185, 129, 0.3) !important;
+        }
+        .marker-cluster-small div, .marker-cluster-medium div, .marker-cluster-large div {
+            background-color: rgba(16, 185, 129, 0.7) !important;
+            color: #000 !important;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 11px;
+        }
+        .lantern-popup .leaflet-popup-content-wrapper {
+            background: #0a0a0a;
+            border: 1px solid #10b981;
+            border-radius: 4px;
+            color: #a7f3d0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+        }
+        .lantern-popup .leaflet-popup-tip { background: #0a0a0a; border: 1px solid #10b981; }
+        .lantern-popup .leaflet-popup-content { margin: 8px 12px; }
+
+        /* Map container must have explicit height */
+        #map-container { height: calc(100vh - 56px); }
+
+        /* News ticker */
+        @keyframes ticker-scroll {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+        }
+        .ticker-scroll {
+            animation: ticker-scroll 30s linear infinite;
+        }
+        .ticker-scroll:hover { animation-play-state: paused; }
+        .ticker-item {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 6px 24px; font-size: 11px; cursor: pointer; pointer-events: auto;
+        }
+        .ticker-item:hover { color: #10b981; }
+
+        /* Toast notification */
+        .toast {
+            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(100px);
+            background: #065f46; color: #a7f3d0; padding: 12px 24px; border: 1px solid #10b981;
+            font-size: 12px; z-index: 9999; transition: transform 0.3s ease;
+        }
+        .toast.show { transform: translateX(-50%) translateY(0); }
+
+        /* Scale bar dark theme */
+        .leaflet-control-scale-line {
+            background: rgba(10,10,10,0.8) !important;
+            border-color: #10b981 !important;
+            color: #a7f3d0 !important;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px !important;
+            padding: 2px 6px !important;
+        }
+
+        /* Attribution dark theme */
+        .leaflet-control-attribution {
+            background: rgba(10,10,10,0.7) !important;
+            color: #4b5563 !important;
+            font-size: 9px !important;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .leaflet-control-attribution a { color: #6b7280 !important; }
+
+        /* Map legend */
+        .lantern-legend {
+            background: rgba(10,10,10,0.9);
+            border: 1px solid #1f2937;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: #9ca3af;
+            min-width: 160px;
+        }
+        .lantern-legend-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 6px 10px; cursor: pointer; user-select: none;
+            color: #d1d5db; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+            border-bottom: 1px solid #1f2937;
+        }
+        .lantern-legend-header:hover { color: #10b981; }
+        .lantern-legend-body { padding: 8px 10px; }
+        .lantern-legend-body.collapsed { display: none; }
+        .lantern-legend-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+        .lantern-legend-row:last-child { margin-bottom: 0; }
+        .legend-dot {
+            width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+            border: 2px solid #0a0a0a;
+        }
+        .legend-cluster {
+            width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0;
+            background: rgba(16,185,129,0.3); display: flex; align-items: center; justify-content: center;
+        }
+        .legend-cluster-inner {
+            width: 12px; height: 12px; border-radius: 50%;
+            background: rgba(16,185,129,0.7);
+        }
+        .lantern-legend-stats {
+            margin-top: 6px; padding-top: 6px; border-top: 1px solid #1f2937;
+            font-size: 9px; color: #6b7280;
+        }
+
+        /* Map control buttons (locate, fullscreen) */
+        .lantern-map-btn {
+            width: 32px; height: 32px; background: rgba(10,10,10,0.9);
+            border: 1px solid #1f2937; border-radius: 4px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; color: #9ca3af; transition: all 0.15s;
+        }
+        .lantern-map-btn:hover { border-color: #10b981; color: #10b981; }
+
+        /* User location pulse */
+        @keyframes loc-pulse {
+            0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); }
+            70% { box-shadow: 0 0 0 12px rgba(59,130,246,0); }
+            100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); }
+        }
+        .user-loc-dot {
+            width: 14px; height: 14px; background: #3b82f6; border: 3px solid #1e3a5f;
+            border-radius: 50%; animation: loc-pulse 2s infinite;
+        }
+
+        /* Map loading overlay */
+        .map-loading {
+            position: absolute; inset: 0; z-index: 999;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: rgba(3,7,18,0.85); pointer-events: none;
+            transition: opacity 0.4s ease;
+        }
+        .map-loading.hidden { opacity: 0; pointer-events: none; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .map-spinner {
+            width: 24px; height: 24px; border: 2px solid #1f2937;
+            border-top-color: #10b981; border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-950 text-gray-300 min-h-screen">
+
+    <!-- ============ SCREEN 1: CITY SELECTOR ============ -->
+    <div id="screen-select" class="screen active flex-col items-center justify-center min-h-screen px-4">
+        <div class="w-full max-w-md mx-auto text-center">
+            <div class="text-6xl mb-6">&#127982;</div>
+            <h1 class="text-3xl font-bold text-white tracking-tight mb-2">LANTERN</h1>
+            <p class="text-emerald-500 text-sm uppercase tracking-widest mb-10">Local News Intelligence</p>
+
+            <div class="bg-gray-900 border border-emerald-900/50 rounded-lg p-8">
+                <p class="text-gray-400 text-sm mb-6">Where are you?</p>
+                <form id="city-form" class="space-y-4">
+                    <input
+                        type="text"
+                        id="city-input"
+                        placeholder="Chico, CA"
+                        autocomplete="off"
+                        class="w-full bg-gray-950 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30 placeholder-gray-600"
+                    />
+                    <button
+                        type="submit"
+                        class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 rounded text-sm uppercase tracking-wider transition-colors"
+                    >Enter</button>
+                </form>
+
+                <div id="recent-cities" class="mt-6 flex flex-wrap gap-2 justify-center"></div>
+            </div>
+            <p class="text-gray-700 text-[10px] mt-8 uppercase tracking-widest">Part of the FogSift ecosystem</p>
+        </div>
+    </div>
+
+    <!-- ============ SCREEN 2: NEWS FEED ============ -->
+    <div id="screen-news" class="screen flex-col min-h-screen">
+        <!-- Navbar -->
+        <nav class="sticky top-0 z-50 bg-gray-950/95 backdrop-blur border-b border-gray-800 px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <span class="text-emerald-500 text-lg">&#127982;</span>
+                <span id="nav-city" class="text-white font-semibold text-sm uppercase tracking-wide"></span>
+            </div>
+            <span class="text-gray-600 text-[10px] uppercase tracking-[0.3em] hidden sm:block">LANTERN</span>
+            <div class="flex items-center gap-3">
+                <button onclick="runSiftFromNews()" id="sift-btn" title="Run intelligence sift" class="text-[11px] uppercase tracking-wider text-emerald-500 border border-emerald-800 hover:border-emerald-500 px-3 py-1.5 rounded transition-colors">
+                    Sift
+                </button>
+                <button onclick="navigateTo('map')" title="Map view" class="text-[11px] uppercase tracking-wider text-emerald-500 border border-emerald-800 hover:border-emerald-500 px-3 py-1.5 rounded transition-colors flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                    Map
+                </button>
+            </div>
+        </nav>
+
+        <!-- Sift bar (hidden by default) -->
+        <div id="sift-bar" class="hidden bg-gray-900 border-b border-gray-800 px-4 py-3">
+            <div class="max-w-5xl mx-auto flex gap-2">
+                <input type="text" id="sift-url" placeholder="Paste URL to sift, or leave blank for auto..." class="flex-1 bg-gray-950 border border-gray-700 rounded px-3 py-2 text-xs text-gray-300 focus:border-emerald-500 focus:outline-none placeholder-gray-600" />
+                <button onclick="executeSift()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded uppercase tracking-wider transition-colors">Execute</button>
+                <button onclick="toggleSiftBar()" class="text-gray-500 hover:text-gray-300 px-2">&times;</button>
+            </div>
+        </div>
+
+        <!-- Streaming output (hidden until sift runs) -->
+        <div id="stream-bar" class="hidden bg-gray-900/80 border-b border-emerald-900/50">
+            <div class="max-w-5xl mx-auto px-4 py-4">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-emerald-500 text-[10px] uppercase tracking-widest animate-pulse font-bold">Signal incoming...</span>
+                    <button onclick="closeStreamBar()" class="text-gray-500 hover:text-gray-300 text-xs">&times;</button>
+                </div>
+                <div id="stream-content" class="md-content text-xs max-h-60 overflow-y-auto scrollbar-hide"></div>
+            </div>
+        </div>
+
+        <!-- Story cards -->
+        <main class="flex-1 px-4 py-6">
+            <div id="news-grid" class="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <!-- Cards injected here -->
+            </div>
+            <div id="news-empty" class="hidden max-w-5xl mx-auto text-center py-20">
+                <p class="text-gray-600 text-sm">No briefings yet. Run a sift to get started.</p>
+            </div>
+        </main>
+
+        <!-- Floating map button (mobile) -->
+        <button onclick="navigateTo('map')" class="fixed bottom-6 right-6 z-40 bg-emerald-600 hover:bg-emerald-500 text-white w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-colors lg:hidden">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        </button>
+    </div>
+
+    <!-- ============ SCREEN 3: MAP VIEW ============ -->
+    <div id="screen-map" class="screen flex-col h-screen">
+        <!-- Map navbar -->
+        <nav class="sticky top-0 z-50 bg-gray-950/95 backdrop-blur border-b border-gray-800 px-4 py-3 flex items-center justify-between">
+            <button onclick="navigateTo('news')" title="News feed (N)" class="text-[11px] uppercase tracking-wider text-emerald-500 border border-emerald-800 hover:border-emerald-500 px-3 py-1.5 rounded transition-colors flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                News
+            </button>
+            <div class="flex items-center gap-2">
+                <span class="text-emerald-500 text-lg">&#127982;</span>
+                <span class="text-gray-600 text-[10px] uppercase tracking-[0.3em]">LANTERN MAP</span>
+            </div>
+            <div class="flex items-center gap-3">
+                <span id="map-updated" class="text-gray-700 text-[10px] tracking-wider hidden"></span>
+                <span id="map-pin-count" class="text-gray-600 text-[10px] uppercase tracking-wider"></span>
+            </div>
+        </nav>
+        <div id="map-container" class="flex-1 relative">
+            <div id="map-loading" class="map-loading">
+                <div class="map-spinner mb-3"></div>
+                <span class="text-emerald-600 text-[10px] uppercase tracking-widest font-semibold">Loading intel...</span>
+            </div>
+            <div id="tactical-map" class="w-full h-full"></div>
+            <!-- News ticker overlay -->
+            <div class="absolute bottom-0 left-0 right-0 z-[1000] pointer-events-none">
+                <div class="bg-gray-950/90 border-t border-emerald-900/50 backdrop-blur">
+                    <div class="flex items-center">
+                        <div class="bg-emerald-600 text-white text-[10px] font-bold uppercase tracking-wider px-3 py-2 flex-shrink-0 pointer-events-auto">
+                            <span class="inline-block w-2 h-2 bg-white rounded-full mr-1.5 animate-pulse"></span>LIVE
+                        </div>
+                        <div class="overflow-hidden flex-1">
+                            <div id="ticker-track" class="flex whitespace-nowrap ticker-scroll">
+                                <!-- Headlines injected here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast"></div>
+
+    <script>
+        // ============ ROUTING ============
+        let sessionCity = null; // set when user picks a city this session
+
+        function navigateTo(screen) {
+            const newHash = '#' + screen;
+            if (location.hash === newHash) {
+                // Hash already matches — hashchange won't fire, call directly
+                handleRoute();
+            } else {
+                location.hash = newHash;
+            }
+        }
+
+        function handleRoute() {
+            const hash = location.hash.replace('#', '') || 'select';
+
+            let target = hash;
+            // Always show city selector on load — user picks city each session
+            // Only allow news/map if city was selected THIS session
+            if ((target === 'news' || target === 'map') && !sessionCity) target = 'select';
+
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            const el = document.getElementById('screen-' + target);
+            if (el) {
+                el.classList.add('active');
+                if (target === 'map') {
+                    // Init map on first show, then invalidateSize on subsequent shows
+                    setTimeout(() => {
+                        if (!map) initMap();
+                        else map.invalidateSize();
+                        if (locationsData.length) renderMapMarkers();
+                    }, 100);
+                }
+                if ((target === 'news' || target === 'map') && !newsLoaded) {
+                    loadBriefings();
+                }
+            }
+        }
+
+        window.addEventListener('hashchange', handleRoute);
+
+        // ============ CITY SELECTOR ============
+        const cityForm = document.getElementById('city-form');
+        const cityInput = document.getElementById('city-input');
+        const recentCitiesEl = document.getElementById('recent-cities');
+
+        function loadRecentCities() {
+            const recent = JSON.parse(localStorage.getItem('lantern_recent_cities') || '[]');
+            recentCitiesEl.innerHTML = recent.map(c =>
+                `<button onclick="selectCity('${c.replace(/'/g, "\\'")}')" class="text-[11px] text-emerald-500 border border-emerald-900 hover:border-emerald-500 px-3 py-1.5 rounded transition-colors">${c}</button>`
+            ).join('');
+        }
+
+        function selectCity(city) {
+            const normalized = city.trim();
+            if (!normalized) return;
+
+            // Only Chico is functional
+            if (!normalized.toLowerCase().includes('chico')) {
+                showToast('Coming soon — only Chico, CA is active');
+                return;
+            }
+
+            sessionCity = normalized;
+            localStorage.setItem('lantern_city', normalized);
+            document.getElementById('nav-city').textContent = normalized;
+
+            // Update recent cities
+            let recent = JSON.parse(localStorage.getItem('lantern_recent_cities') || '[]');
+            recent = [normalized, ...recent.filter(c => c !== normalized)].slice(0, 5);
+            localStorage.setItem('lantern_recent_cities', JSON.stringify(recent));
+
+            navigateTo('map');
+        }
+
+        cityForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            selectCity(cityInput.value || 'Chico, CA');
+        });
+
+        loadRecentCities();
+
+        // ============ NEWS FEED ============
+        let newsLoaded = false;
+        let briefingsData = [];
+        let locationsData = [];
+
+        async function loadBriefings() {
+            try {
+                const [briefRes, locRes] = await Promise.all([
+                    fetch('/api/briefings?limit=30'),
+                    fetch('/api/locations')
+                ]);
+                briefingsData = await briefRes.json();
+                locationsData = await locRes.json();
+                renderCards();
+                renderMapMarkers();
+                renderTicker();
+                newsLoaded = true;
+            } catch (e) {
+                console.error('Failed to load briefings:', e);
+            }
+        }
+
+        function renderCards() {
+            const grid = document.getElementById('news-grid');
+            const empty = document.getElementById('news-empty');
+
+            if (!briefingsData.length) {
+                grid.innerHTML = '';
+                empty.classList.remove('hidden');
+                return;
+            }
+            empty.classList.add('hidden');
+
+            grid.innerHTML = briefingsData.map((b, i) => {
+                const locs = locationsData.filter(l => l.briefing_id === b.id);
+                const locBadges = locs.map(l =>
+                    `<button onclick="event.stopPropagation(); jumpToPin(${l.lat}, ${l.lng})" class="text-[9px] bg-emerald-900/40 text-emerald-400 border border-emerald-800/50 px-1.5 py-0.5 rounded hover:border-emerald-500 transition-colors" title="${l.snippet || ''}">${l.label}</button>`
+                ).join('');
+                const timeStr = formatTime(b.timestamp);
+                const cleanContent = (b.content || '').replace(/\x1b\[[0-9;]*m/g, '');
+
+                return `
+                <div class="card bg-gray-900 border border-gray-800 hover:border-emerald-900 rounded-lg overflow-hidden cursor-pointer transition-colors" data-id="${b.id}" onclick="toggleCard(this)">
+                    <div class="p-4">
+                        <div class="flex items-start justify-between gap-2 mb-2">
+                            <h3 class="text-white font-semibold text-sm leading-snug flex-1">${escapeHtml(b.headline)}</h3>
+                            <svg class="expand-icon w-4 h-4 text-gray-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </div>
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="text-[9px] uppercase tracking-wider text-emerald-600 font-semibold">${escapeHtml(b.source)}</span>
+                            <span class="text-[9px] text-gray-600">${timeStr}</span>
+                        </div>
+                        ${locBadges ? `<div class="flex flex-wrap gap-1 mb-2">${locBadges}</div>` : ''}
+                        <p class="card-preview text-gray-500 text-xs leading-relaxed line-clamp-3">${escapeHtml(b.preview)}</p>
+                        <div class="card-content">
+                            <div class="pt-3 border-t border-gray-800 mt-3 md-content text-xs">${marked.parse(cleanContent)}</div>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function toggleCard(el) {
+            el.classList.toggle('expanded');
+        }
+
+        function scrollToCard(briefingId) {
+            const card = document.querySelector(`.card[data-id="${briefingId}"]`);
+            if (card) {
+                card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                if (!card.classList.contains('expanded')) card.classList.add('expanded');
+            }
+        }
+
+        function jumpToPin(lat, lng) {
+            navigateTo('map');
+            setTimeout(() => {
+                if (map) {
+                    map.invalidateSize();
+                    map.setView([lat, lng], 16);
+                }
+            }, 150);
+        }
+
+        function formatTime(ts) {
+            if (!ts) return '';
+            try {
+                const d = new Date(ts.replace(' ', 'T'));
+                const now = new Date();
+                const diff = now - d;
+                if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+                if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+                if (diff < 604800000) return Math.floor(diff / 86400000) + 'd ago';
+                return d.toLocaleDateString();
+            } catch (e) { return ts; }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // ============ SIFT (from news view) ============
+        function runSiftFromNews() {
+            const bar = document.getElementById('sift-bar');
+            if (bar.classList.contains('hidden')) {
+                toggleSiftBar();
+            } else {
+                executeSift();
+            }
+        }
+
+        function toggleSiftBar() {
+            document.getElementById('sift-bar').classList.toggle('hidden');
+            const input = document.getElementById('sift-url');
+            if (!document.getElementById('sift-bar').classList.contains('hidden')) input.focus();
+        }
+
+        let currentMarkdown = '';
+
+        function executeSift() {
+            const urlInput = document.getElementById('sift-url');
+            const url = urlInput ? urlInput.value : '';
+            urlInput && (urlInput.value = '');
+            document.getElementById('sift-bar').classList.add('hidden');
+
+            // Show stream bar
+            const streamBar = document.getElementById('stream-bar');
+            const streamContent = document.getElementById('stream-content');
+            streamBar.classList.remove('hidden');
+            streamContent.innerHTML = '';
+            currentMarkdown = '';
+
+            const eventSource = new EventSource('/api/sift' + (url ? '?url=' + encodeURIComponent(url) : ''));
+            eventSource.onmessage = function(e) {
+                const data = JSON.parse(e.data);
+                if (data.done) {
+                    eventSource.close();
+                    streamContent.innerHTML += '<div class="mt-2"><span class="bg-emerald-600 text-white px-2 py-1 rounded text-[10px] font-semibold uppercase">Archived</span></div>';
+                    // Reload briefings after a delay (location extraction is async)
+                    setTimeout(() => {
+                        newsLoaded = false;
+                        loadBriefings();
+                    }, 3000);
+                } else {
+                    currentMarkdown += data.content;
+                    streamContent.innerHTML = marked.parse(currentMarkdown.replace(/\x1b\[[0-9;]*m/g, ''));
+                }
+                streamContent.scrollTop = streamContent.scrollHeight;
+            };
+        }
+
+        function closeStreamBar() {
+            document.getElementById('stream-bar').classList.add('hidden');
+        }
+
+        // ============ MAP ============
+        let map, clusterGroup, userLocMarker;
+        let lastDataLoad = null;
+
+        function initMap() {
+            map = L.map('tactical-map', { zoomControl: false }).setView([39.728, -121.837], 13);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>'
+            }).addTo(map);
+            L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+            // Scale bar (Step 1)
+            L.control.scale({ position: 'bottomleft', imperial: true, metric: true }).addTo(map);
+
+            // Legend (Step 3)
+            const LegendControl = L.Control.extend({
+                options: { position: 'bottomleft' },
+                onAdd: function() {
+                    const div = L.DomUtil.create('div', 'lantern-legend');
+                    div.innerHTML = `
+                        <div class="lantern-legend-header" onclick="this.nextElementSibling.classList.toggle('collapsed')">
+                            <span>Legend</span>
+                            <span style="font-size:8px;">&#9660;</span>
+                        </div>
+                        <div class="lantern-legend-body" id="legend-body">
+                            <div class="lantern-legend-row"><div class="legend-dot" style="background:#10b981;box-shadow:0 0 6px #10b98199;"></div><span>News location</span></div>
+                            <div class="lantern-legend-row"><div class="legend-cluster"><div class="legend-cluster-inner"></div></div><span>Multiple stories</span></div>
+                            <div class="lantern-legend-stats" id="legend-stats"></div>
+                        </div>`;
+                    L.DomEvent.disableClickPropagation(div);
+                    return div;
+                }
+            });
+            new LegendControl().addTo(map);
+
+            // Locate Me button (Step 6)
+            const LocateControl = L.Control.extend({
+                options: { position: 'topright' },
+                onAdd: function() {
+                    const btn = L.DomUtil.create('div', 'lantern-map-btn');
+                    btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4m10-10h-4M6 12H2" stroke-linecap="round"/></svg>';
+                    btn.title = 'Locate me';
+                    btn.onclick = locateUser;
+                    L.DomEvent.disableClickPropagation(btn);
+                    return btn;
+                }
+            });
+            new LocateControl().addTo(map);
+
+            // Fullscreen button (Step 7)
+            const FullscreenControl = L.Control.extend({
+                options: { position: 'topright' },
+                onAdd: function() {
+                    const btn = L.DomUtil.create('div', 'lantern-map-btn');
+                    btn.id = 'fullscreen-btn';
+                    btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4h4m8 0h4v4m0 8v4h-4m-8 0H4v-4"/></svg>';
+                    btn.title = 'Toggle fullscreen (F)';
+                    btn.onclick = toggleFullscreen;
+                    L.DomEvent.disableClickPropagation(btn);
+                    return btn;
+                }
+            });
+            new FullscreenControl().addTo(map);
+
+            clusterGroup = L.markerClusterGroup({
+                maxClusterRadius: 40,
+                spiderfyOnMaxZoom: true,
+                showCoverageOnHover: false
+            });
+            map.addLayer(clusterGroup);
+        }
+
+        // Locate user (Step 6)
+        function locateUser() {
+            if (!navigator.geolocation) {
+                showToast('Geolocation not supported');
+                return;
+            }
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    const { latitude: lat, longitude: lng } = pos.coords;
+                    if (userLocMarker) map.removeLayer(userLocMarker);
+                    const locIcon = L.divIcon({ className: '', html: '<div class="user-loc-dot"></div>', iconSize: [14, 14], iconAnchor: [7, 7] });
+                    userLocMarker = L.marker([lat, lng], { icon: locIcon }).addTo(map);
+                    map.setView([lat, lng], 14);
+                },
+                () => showToast('Location access denied'),
+                { enableHighAccuracy: true, timeout: 8000 }
+            );
+        }
+
+        // Fullscreen toggle (Step 7)
+        function toggleFullscreen() {
+            const container = document.getElementById('map-container');
+            const btn = document.getElementById('fullscreen-btn');
+            if (!document.fullscreenElement) {
+                container.requestFullscreen().catch(() => showToast('Fullscreen not available'));
+                btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 4H4v4m12-4h4v4m0 8v4h-4m-8 0H4v-4"/></svg>';
+            } else {
+                document.exitFullscreen();
+                btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4h4m8 0h4v4m0 8v4h-4m-8 0H4v-4"/></svg>';
+            }
+            setTimeout(() => map && map.invalidateSize(), 200);
+        }
+
+        document.addEventListener('fullscreenchange', () => {
+            const btn = document.getElementById('fullscreen-btn');
+            if (!btn) return;
+            if (document.fullscreenElement) {
+                btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 4H4v4m12-4h4v4m0 8v4h-4m-8 0H4v-4"/></svg>';
+            } else {
+                btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4h4m8 0h4v4m0 8v4h-4m-8 0H4v-4"/></svg>';
+            }
+            setTimeout(() => map && map.invalidateSize(), 200);
+        });
+
+        const pinIcon = L.divIcon({
+            className: '',
+            html: '<div style="width:12px;height:12px;background:#10b981;border:2px solid #0a0a0a;border-radius:50%;box-shadow:0 0 8px #10b981aa;"></div>',
+            iconSize: [12, 12],
+            iconAnchor: [6, 6],
+            popupAnchor: [0, -8]
+        });
+
+        function renderMapMarkers() {
+            if (!clusterGroup) return;
+            clusterGroup.clearLayers();
+            locationsData.forEach(loc => {
+                const marker = L.marker([loc.lat, loc.lng], { icon: pinIcon });
+                const time = loc.timestamp || loc.created_at || '';
+                const readLink = loc.briefing_id
+                    ? `<br><a href="#news" onclick="setTimeout(function(){scrollToCard(${loc.briefing_id})},100)" style="color:#10b981;font-size:9px;">Read full story &rarr;</a>`
+                    : '';
+                marker.bindPopup(
+                    `<strong style="color:#10b981;text-transform:uppercase;font-size:10px;">${loc.label}</strong>` +
+                    `<br><span style="color:#6ee7b7;">${loc.snippet || ''}</span>` +
+                    `<br><span style="color:#065f46;font-size:9px;">${time}</span>` +
+                    readLink,
+                    { className: 'lantern-popup', maxWidth: 240 }
+                );
+                clusterGroup.addLayer(marker);
+            });
+            document.getElementById('map-pin-count').textContent = locationsData.length + ' pins';
+
+            // Update legend stats
+            const statsEl = document.getElementById('legend-stats');
+            if (statsEl) {
+                statsEl.textContent = locationsData.length + ' pins · ' + briefingsData.length + ' briefings';
+            }
+
+            // Update timestamp (Step 4)
+            lastDataLoad = new Date();
+            updateTimestamp();
+
+            // Hide loading overlay (Step 5)
+            const loading = document.getElementById('map-loading');
+            if (loading) loading.classList.add('hidden');
+        }
+
+        function updateTimestamp() {
+            const el = document.getElementById('map-updated');
+            if (!el || !lastDataLoad) return;
+            const diff = Date.now() - lastDataLoad.getTime();
+            const mins = Math.floor(diff / 60000);
+            el.textContent = mins < 1 ? 'Updated just now' : 'Updated ' + mins + 'm ago';
+            el.classList.remove('hidden');
+        }
+        // Refresh the "Updated" display every 30s
+        setInterval(updateTimestamp, 30000);
+
+        function renderTicker() {
+            const track = document.getElementById('ticker-track');
+            if (!track || !briefingsData.length) return;
+            const items = briefingsData.slice(0, 12).map(b => {
+                const time = formatTime(b.timestamp);
+                return `<span class="ticker-item text-gray-400" onclick="navigateTo('news');setTimeout(function(){scrollToCard(${b.id})},200)"><span class="text-emerald-600 text-[9px] font-semibold">${escapeHtml(b.source)}</span><span class="text-gray-300">${escapeHtml(b.headline)}</span><span class="text-gray-600 text-[9px]">${time}</span><span class="text-emerald-900 mx-2">///</span></span>`;
+            }).join('');
+            // Duplicate for seamless loop
+            track.innerHTML = items + items;
+            // Adjust animation duration based on content width
+            requestAnimationFrame(() => {
+                const halfWidth = track.scrollWidth / 2;
+                const duration = Math.max(20, halfWidth / 40); // ~40px/sec
+                track.style.animationDuration = duration + 's';
+            });
+        }
+
+        // ============ TOAST ============
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 3000);
+        }
+
+        // ============ KEYBOARD SHORTCUTS (Step 8) ============
+        document.addEventListener('keydown', (e) => {
+            // Don't fire shortcuts when typing in inputs
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            if (e.key === 'n') navigateTo('news');
+            if (e.key === 'Escape' && document.fullscreenElement) document.exitFullscreen();
+            if (e.key === 'f' || e.key === 'F') {
+                const mapScreen = document.getElementById('screen-map');
+                if (mapScreen && mapScreen.classList.contains('active')) toggleFullscreen();
+            }
+        });
+
+        // ============ AUTO-RELOAD HEARTBEAT ============
+        let nodeDead = false;
+        setInterval(async () => {
+            try {
+                await fetch('/api/health');
+                if (nodeDead) window.location.reload();
+            } catch (e) { nodeDead = true; }
+        }, 2000);
+
+        // ============ BOOT ============
+        // Map init is deferred until #map screen is first shown (Leaflet needs visible container)
+
+        // Restore city if set
+        const savedCity = localStorage.getItem('lantern_city');
+        if (savedCity) {
+            document.getElementById('nav-city').textContent = savedCity;
+        }
+
+        // Initial route
+        handleRoute();
+    </script>
+</body>
+</html>

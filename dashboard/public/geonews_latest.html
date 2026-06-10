@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GeoNews | Live Intelligence Engine</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet Map & Cluster CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #0f172a; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+        
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; z-index: 1; background: #0f172a; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
+        
+        .pointer-events-auto { pointer-events: auto; }
+
+        /* Custom UI Scrollbar */
+        .custom-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
+        .custom-scroll::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #475569; border-radius: 10px; }
+
+        /* Custom Map Pins */
+        .custom-news-pin { background-color: transparent; border: none; }
+        .pin-image-wrapper {
+            width: 48px; height: 48px; border-radius: 50%;
+            border: 3px solid #f8fafc; box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+            overflow: hidden; background: #1e293b; position: relative;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .pin-image-wrapper:hover {
+            transform: scale(1.25) translateY(-5px);
+            border-color: #38bdf8;
+            z-index: 1000 !important;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.9);
+        }
+        
+        /* Status Borders */
+        .pin-image-wrapper.breaking { border-color: #ef4444; }
+        .pin-image-wrapper.positive { border-color: #fbbf24; }
+        .pin-image-wrapper.weekend { border-color: #c084fc; }
+        
+        .pin-image-wrapper img { width: 100%; height: 100%; object-fit: cover; }
+        
+        .breaking-badge {
+            position: absolute; top: -4px; right: -4px; width: 16px; height: 16px;
+            background-color: #ef4444; border-radius: 50%; border: 2px solid white;
+            animation: pulse-red 1.5s infinite;
+        }
+
+        /* Cluster "Blob" Styling */
+        .custom-cluster-blob {
+            background-color: rgba(56, 189, 248, 0.85);
+            border: 4px solid rgba(224, 242, 254, 0.4);
+            border-radius: 50%; color: white; font-weight: 800; font-size: 16px;
+            text-align: center; display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 0 25px rgba(56, 189, 248, 0.5);
+            backdrop-filter: blur(4px); transition: transform 0.2s;
+        }
+        .custom-cluster-blob.has-breaking {
+            background-color: rgba(239, 68, 68, 0.85);
+            box-shadow: 0 0 25px rgba(239, 68, 68, 0.6);
+            animation: pulse-border 2s infinite;
+        }
+        .custom-cluster-blob:hover { transform: scale(1.15); }
+
+        /* Marquee Ticker Setup */
+        .marquee-wrapper {
+            overflow: hidden; white-space: nowrap; display: flex; align-items: center;
+            background: linear-gradient(90deg, #020617 0%, #0f172a 50%, #020617 100%);
+            border-top: 1px solid #1e293b;
+        }
+        .marquee-content { display: inline-flex; animation: marquee 40s linear infinite; }
+        .marquee-wrapper:hover .marquee-content { animation-play-state: paused; }
+
+        @keyframes marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+        @keyframes pulse-red {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        @keyframes pulse-border {
+            0%, 100% { border-color: rgba(254, 226, 226, 0.4); }
+            50% { border-color: rgba(239, 68, 68, 0.8); }
+        }
+        .animate-in { animation: slide-in 0.4s ease-out forwards; }
+        @keyframes slide-in { from { transform: translateX(-20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+        /* Popups */
+        .leaflet-popup-content-wrapper { background: #0f172abf; backdrop-filter: blur(10px); color: #f8fafc; border-radius: 12px; border: 1px solid #334155; }
+        .leaflet-popup-tip { background: #0f172a; border-top: 1px solid #334155; border-left: 1px solid #334155; }
+        .leaflet-popup-content { margin: 12px; }
+        
+        /* Hide scrollbar completely on the filter row for a cleaner look */
+        .hide-scroll::-webkit-scrollbar { display: none; }
+        .hide-scroll { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="text-slate-100">
+
+    <div id="map"></div>
+
+    <div id="ui-layer">
+        
+        <div class="p-4 md:p-6 flex flex-col gap-4 h-full max-h-[calc(100vh-40px)]">
+            
+            <!-- Header -->
+            <header class="pointer-events-auto flex items-center justify-between gap-4 w-full max-w-7xl mx-auto z-50">
+                <div class="flex items-center gap-3 bg-slate-900/90 backdrop-blur-md px-5 py-3 rounded-2xl border border-slate-700/60 shadow-xl">
+                    <div class="w-3 h-3 bg-red-500 rounded-full animate-[pulse-red_2s_infinite]"></div>
+                    <div class="flex flex-col">
+                        <h1 class="font-bold tracking-tight text-lg leading-none text-white flex items-center gap-1">
+                            Geo<span class="text-slate-400">News</span>
+                        </h1>
+                        <span class="text-[10px] text-slate-400 font-medium uppercase tracking-wider mt-1">Chico, CA &bull; Live</span>
+                    </div>
+                </div>
+
+                <div class="flex-1 max-w-md hidden md:flex">
+                    <div class="relative w-full bg-slate-900/80 backdrop-blur-md rounded-2xl border border-slate-700/60 shadow-xl overflow-hidden flex items-center px-4 py-2 hover:border-slate-500 transition-colors">
+                        <span class="text-slate-400 mr-2">📍</span>
+                        <input type="text" placeholder="Search location..." value="Chico, CA" class="bg-transparent border-none outline-none text-white w-full font-medium" readonly>
+                    </div>
+                </div>
+
+                <div id="data-status-pill" class="bg-slate-900/90 backdrop-blur-md px-4 py-2 rounded-2xl border border-slate-700/60 shadow-xl flex items-center gap-2">
+                    <span class="text-xs text-slate-400 uppercase tracking-widest font-bold hidden sm:block">AI Core</span>
+                    <span id="data-status-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span id="data-status-text" class="text-[10px] text-emerald-400 font-mono tracking-wider">SYNCED</span>
+                </div>
+            </header>
+
+            <div class="flex-1 flex justify-between overflow-hidden max-w-7xl mx-auto w-full relative">
+                
+                <!-- Left Sidebar: Discovery Engine -->
+                <aside class="pointer-events-auto w-full md:w-[380px] flex flex-col bg-slate-900/85 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-2xl overflow-hidden mt-2 transition-all h-full max-h-full">
+                    
+                    <div class="flex flex-col border-b border-slate-700/50 bg-slate-800/60">
+                        <div class="p-4 pb-3 flex justify-between items-center">
+                            <h2 class="font-bold text-sm uppercase tracking-widest text-slate-200">Smart Discovery</h2>
+                            <span id="event-count" class="bg-sky-500/20 text-sky-400 border border-sky-500/30 text-[10px] px-2 py-1 rounded-md font-mono font-bold">0 MATCHES</span>
+                        </div>
+                        
+                        <!-- Smart Filters Row -->
+                        <div id="filter-container" class="px-4 pb-4 flex gap-2 overflow-x-auto hide-scroll whitespace-nowrap scroll-smooth">
+                            <!-- Injected via JS -->
+                        </div>
+                    </div>
+
+                    <!-- Feed List -->
+                    <div id="feed-container" class="flex-1 overflow-y-auto custom-scroll p-3 flex flex-col gap-3">
+                        <!-- Cards injected via JS -->
+                    </div>
+                </aside>
+
+                <!-- Right HUD Controls (HTML/Unicode Only, No SVG) -->
+                <div class="pointer-events-auto flex flex-col justify-end gap-3 pb-6 hidden md:flex opacity-90 hover:opacity-100 transition-opacity">
+                    <button onclick="map.zoomIn()" class="w-12 h-12 flex items-center justify-center bg-slate-900/80 hover:bg-slate-800 backdrop-blur-md rounded-xl border border-slate-700/60 shadow-xl text-slate-300 hover:text-white transition-all hover:scale-105 active:scale-95 text-2xl font-bold">
+                        ＋
+                    </button>
+                    <button onclick="map.zoomOut()" class="w-12 h-12 flex items-center justify-center bg-slate-900/80 hover:bg-slate-800 backdrop-blur-md rounded-xl border border-slate-700/60 shadow-xl text-slate-300 hover:text-white transition-all hover:scale-105 active:scale-95 text-2xl font-bold">
+                        －
+                    </button>
+                    <button onclick="recenterMap()" class="mt-4 w-12 h-12 flex items-center justify-center bg-sky-500/20 hover:bg-sky-500/40 backdrop-blur-md rounded-xl border border-sky-500/30 shadow-xl text-sky-400 hover:text-sky-200 transition-all hover:scale-105 active:scale-95 text-xl font-bold" title="Recenter">
+                        ⟲
+                    </button>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Marquee Ticker -->
+        <div class="pointer-events-auto marquee-wrapper h-[40px] shrink-0 z-50 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
+            <div id="marquee-content" class="marquee-content text-sm tracking-wide flex items-center">
+                <!-- Injected via JS -->
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+
+    <script>
+        // --- 1. CONFIGURATION & STATE ---
+        const CHICO_LAT = 39.7285;
+        const CHICO_LNG = -121.8375;
+        
+        // Visual mappings for the pin categories
+        const categories = {
+            'Crime':   { icon: '🚨', color: 'text-red-400' },
+            'Civic':   { icon: '🏛️', color: 'text-blue-400' },
+            'Traffic': { icon: '🚗', color: 'text-amber-400' },
+            'Event':   { icon: '🎉', color: 'text-emerald-400' },
+            'Alert':   { icon: '⚠️', color: 'text-orange-400' }
+        };
+
+        // The new "Smart Filters" Engine
+        const smartFilters = {
+            'right_now': { label: 'Right Now', icon: '⏱️', color: 'sky',    check: e => e.timeContext === 'now' },
+            'weekend':   { label: 'This Weekend',icon: '📅', color: 'purple', check: e => e.timeContext === 'weekend' },
+            'emergency': { label: 'Emergencies', icon: '🚨', color: 'red',    check: e => e.isBreaking || e.category === 'Crime' },
+            'positive':  { label: 'Positive',    icon: '🌟', color: 'amber',  check: e => e.sentiment === 'positive' },
+            'events':    { label: 'Events',      icon: '🎉', color: 'emerald',check: e => e.category === 'Event' },
+            'all':       { label: 'All Activity',icon: '🌍', color: 'slate',  check: e => true }
+        };
+
+        let currentFilter = 'right_now'; // Default view
+        let globalNewsData = []; 
+        let activeMarkers = {};  
+        const FALLBACK_IMAGES = [
+            "https://images.unsplash.com/photo-1549221533-68d3ee8a4a58?auto=format&fit=crop&w=150&q=80",
+            "https://images.unsplash.com/photo-1506521781263-d8422e82f27a?auto=format&fit=crop&w=150&q=80",
+            "https://images.unsplash.com/photo-1477959858617-67f8516a4614?auto=format&fit=crop&w=150&q=80",
+            "https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?auto=format&fit=crop&w=150&q=80",
+            "https://images.unsplash.com/photo-1605806616949-1e87b487cb2a?auto=format&fit=crop&w=150&q=80"
+        ];
+
+        // --- 2. MAP INITIALIZATION ---
+        const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([CHICO_LAT, CHICO_LNG], 13);
+        
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            subdomains: 'abcd', maxZoom: 19
+        }).addTo(map);
+
+        const clusterGroup = L.markerClusterGroup({
+            maxClusterRadius: 50,
+            spiderfyOnMaxZoom: true,
+            showCoverageOnHover: false,
+            zoomToBoundsOnClick: true,
+            iconCreateFunction: function(cluster) {
+                const markers = cluster.getAllChildMarkers();
+                const hasBreaking = markers.some(m => m.options.eventData.isBreaking);
+                const count = cluster.getChildCount();
+                const size = count < 5 ? 40 : count < 15 ? 50 : 60;
+                const activeClass = hasBreaking ? 'has-breaking' : '';
+                
+                return new L.DivIcon({ 
+                    html: `<div><span>${count}</span></div>`, 
+                    className: `custom-cluster-blob ${activeClass}`, 
+                    iconSize: new L.Point(size, size) 
+                });
+            }
+        });
+        map.addLayer(clusterGroup);
+
+        function recenterMap() { map.flyTo([CHICO_LAT, CHICO_LNG], 13, { duration: 1 }); }
+
+        // --- 3. DATA SEEDING (With TimeBox and Sentiment) ---
+        // Note: Using explicit display strings for time to simulate complex NLP extraction perfectly.
+        const seedData = [
+            { id: 1, lat: 39.7301, lng: -121.8412, title: "Structure fire reported near Enloe Medical", category: "Alert", sentiment: "negative", timeContext: "now", displayTime: "12 mins ago", img: "https://images.unsplash.com/photo-1549221533-68d3ee8a4a58?auto=format&fit=crop&w=150&q=80", isBreaking: true, source: "Action News" },
+            { id: 2, lat: 39.7285, lng: -121.8375, title: "Saturday Farmers Market Expansion", category: "Event", sentiment: "positive", timeContext: "weekend", displayTime: "Sat, 8:00 AM", img: "https://images.unsplash.com/photo-1533900298318-6b8da08a523e?auto=format&fit=crop&w=150&q=80", isBreaking: false, source: "Chico ER" },
+            { id: 3, lat: 39.7350, lng: -121.8450, title: "Downtown Art Mural Unveiling", category: "Event", sentiment: "positive", timeContext: "weekend", displayTime: "Sat, 2:00 PM", img: "https://images.unsplash.com/photo-1499781350541-7783f6c6a0c8?auto=format&fit=crop&w=150&q=80", isBreaking: false, source: "News & Review" },
+            { id: 4, lat: 39.7150, lng: -121.8200, title: "Traffic: Highway 99 Southbound Collision", category: "Traffic", sentiment: "negative", timeContext: "now", displayTime: "25 mins ago", img: "https://images.unsplash.com/photo-1506521781263-d8422e82f27a?auto=format&fit=crop&w=150&q=80", isBreaking: false, source: "CalTrans" },
+            { id: 5, lat: 39.7200, lng: -121.8300, title: "City Council Approves Park Funding", category: "Civic", sentiment: "positive", timeContext: "now", displayTime: "1 hr ago", img: "https://images.unsplash.com/photo-1477959858617-67f8516a4614?auto=format&fit=crop&w=150&q=80", isBreaking: false, source: "City Press" },
+            { id: 6, lat: 39.7320, lng: -121.8350, title: "Live Music: The Coffis Brothers", category: "Event", sentiment: "positive", timeContext: "weekend", displayTime: "Fri, 9:00 PM", img: "https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?auto=format&fit=crop&w=150&q=80", isBreaking: false, source: "Sierra Nevada" },
+            { id: 7, lat: 39.7100, lng: -121.8100, title: "Commercial Burglary Investigation", category: "Crime", sentiment: "negative", timeContext: "now", displayTime: "3 hrs ago", img: "https://images.unsplash.com/photo-1605806616949-1e87b487cb2a?auto=format&fit=crop&w=150&q=80", isBreaking: false, source: "Police Log" }
+        ];
+
+        // --- 4. RENDER ENGINE ---
+
+        function buildFilters() {
+            const container = document.getElementById('filter-container');
+            container.innerHTML = '';
+            
+            Object.keys(smartFilters).forEach(key => {
+                const filter = smartFilters[key];
+                const isActive = currentFilter === key;
+                
+                // Color mapping for active states
+                const colorMap = {
+                    'sky': 'bg-sky-500/20 text-sky-300 border-sky-500/50',
+                    'purple': 'bg-purple-500/20 text-purple-300 border-purple-500/50',
+                    'red': 'bg-red-500/20 text-red-300 border-red-500/50',
+                    'amber': 'bg-amber-500/20 text-amber-300 border-amber-500/50',
+                    'emerald': 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50',
+                    'slate': 'bg-slate-500/20 text-slate-300 border-slate-500/50'
+                };
+
+                const baseClass = `flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-bold cursor-pointer transition-all border`;
+                const activeClass = isActive ? `${colorMap[filter.color]} shadow-[0_0_15px_rgba(0,0,0,0.3)] scale-105` : `bg-slate-800/80 text-slate-400 border-slate-700 hover:bg-slate-700 hover:text-slate-200`;
+                
+                const btn = document.createElement('button');
+                btn.className = `${baseClass} ${activeClass}`;
+                btn.innerHTML = `<span class="text-sm">${filter.icon}</span> <span>${filter.label}</span>`;
+                btn.onclick = () => {
+                    currentFilter = key;
+                    buildFilters(); 
+                    renderUI();     
+                };
+                container.appendChild(btn);
+            });
+        }
+
+        function buildMarquee() {
+            const container = document.getElementById('marquee-content');
+            let itemsHtml = '';
+            
+            // Show only 'now' events in the live ticker to keep it urgent
+            const liveEvents = globalNewsData.filter(e => e.timeContext === 'now').reverse();
+            
+            liveEvents.forEach(item => {
+                const isPos = item.sentiment === 'positive';
+                const tagIcon = item.isBreaking ? '🚨' : (isPos ? '🌟' : '📍');
+                const tagColor = item.isBreaking ? 'bg-red-500' : (isPos ? 'bg-amber-500' : 'bg-slate-600');
+                
+                const tagHTML = `<span class="${tagColor} text-white px-2 py-0.5 rounded text-[10px] uppercase font-bold mr-2 ${item.isBreaking?'animate-pulse':''}">${tagIcon} ${item.isBreaking?'BREAKING':item.category}</span>`;
+                const textStyle = item.isBreaking ? 'text-white font-bold' : (isPos ? 'text-amber-100' : 'text-slate-300');
+                
+                itemsHtml += `
+                    <div class="flex items-center mx-6">
+                        ${tagHTML}
+                        <span class="${textStyle}">${item.title}</span>
+                        <span class="text-slate-500 text-xs ml-3 border-l border-slate-700 pl-3">${item.displayTime} &bull; ${item.source}</span>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = itemsHtml + itemsHtml; 
+        }
+
+        function createMapPin(event) {
+            let badge = event.isBreaking ? `<div class="breaking-badge"></div>` : '';
+            
+            // Determine ring color
+            let ringClass = '';
+            if(event.isBreaking) ringClass = 'breaking';
+            else if(event.timeContext === 'weekend') ringClass = 'weekend';
+            else if(event.sentiment === 'positive') ringClass = 'positive';
+
+            const customIcon = L.divIcon({
+                className: 'custom-news-pin',
+                html: `<div class="pin-image-wrapper ${ringClass}"><img src="${event.img}" />${badge}</div>`,
+                iconSize: [48, 48], iconAnchor: [24, 24], popupAnchor: [0, -24]
+            });
+
+            const marker = L.marker([event.lat, event.lng], { 
+                icon: customIcon,
+                eventData: event // Pass data to marker for cluster logic
+            });
+            
+            const cat = categories[event.category] || categories['Alert'];
+            marker.bindPopup(`
+                <div class="w-48">
+                    <img src="${event.img}" class="w-full h-24 object-cover rounded-md mb-2 border border-slate-700" />
+                    <div class="text-[10px] font-bold uppercase tracking-wider ${cat.color} mb-1 flex items-center gap-1"><span>${cat.icon}</span> ${event.category}</div>
+                    <h3 class="font-bold text-sm leading-snug mb-2 text-white">${event.title}</h3>
+                    <div class="flex justify-between items-center text-xs text-slate-400 font-mono bg-slate-800 p-1.5 rounded">
+                        <span>${event.displayTime}</span>
+                    </div>
+                </div>
+            `);
+            return marker;
+        }
+
+        function createFeedCard(event, isNew = false) {
+            const card = document.createElement('div');
+            
+            // Visual Styling based on Event Type
+            let borderClass = 'border-slate-700 hover:border-slate-500 bg-slate-800/40';
+            let highlightIcon = categories[event.category].icon;
+
+            if (event.isBreaking) {
+                borderClass = 'border-red-500/50 hover:border-red-400 bg-red-950/30';
+                highlightIcon = '🚨';
+            } else if (event.timeContext === 'weekend') {
+                borderClass = 'border-purple-500/30 hover:border-purple-400 bg-purple-900/10';
+                highlightIcon = '📅';
+            } else if (event.sentiment === 'positive') {
+                borderClass = 'border-amber-500/30 hover:border-amber-400 bg-amber-900/10';
+                highlightIcon = '🌟';
+            }
+            
+            const animateClass = isNew ? 'animate-in' : '';
+            card.className = `group cursor-pointer rounded-xl p-3 flex gap-3 transition-all border hover:bg-slate-700/80 ${borderClass} ${animateClass}`;
+            
+            card.onclick = () => {
+                map.flyTo([event.lat, event.lng], 16, { duration: 1.2 });
+                setTimeout(() => {
+                    const m = activeMarkers[event.id];
+                    if(m) { clusterGroup.zoomToShowLayer(m, () => { m.openPopup(); }); }
+                }, 1300);
+            };
+
+            card.innerHTML = `
+                <div class="w-[72px] h-[72px] shrink-0 rounded-lg overflow-hidden border border-slate-600 group-hover:border-slate-300 transition-colors relative shadow-lg">
+                    <img src="${event.img}" class="w-full h-full object-cover" />
+                </div>
+                <div class="flex-1 flex flex-col justify-center overflow-hidden">
+                    <div class="flex items-center gap-1.5 mb-1">
+                        <span class="text-[12px]">${highlightIcon}</span>
+                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">${event.category}</span>
+                        ${event.isBreaking ? `<span class="bg-red-500 text-white text-[8px] px-1 rounded animate-pulse ml-auto">LIVE</span>` : ''}
+                    </div>
+                    <h3 class="text-[13px] font-semibold text-slate-200 leading-tight group-hover:text-white line-clamp-2">${event.title}</h3>
+                    <div class="text-[11px] font-mono text-slate-400 mt-2 flex justify-between bg-slate-900/50 rounded px-1.5 py-0.5">
+                        <span class="truncate">${event.source}</span>
+                        <span class="${event.timeContext==='weekend' ? 'text-purple-300' : 'text-sky-300'} font-bold">${event.displayTime}</span>
+                    </div>
+                </div>
+            `;
+            return card;
+        }
+
+        function renderUI(highlightNewest = false) {
+            // 1. Filter Data using the active Smart Filter function
+            const filterLogic = smartFilters[currentFilter].check;
+            const filteredData = globalNewsData.filter(filterLogic);
+
+            // 2. Clear current UI
+            clusterGroup.clearLayers();
+            const feedContainer = document.getElementById('feed-container');
+            feedContainer.innerHTML = '';
+            activeMarkers = {};
+
+            // 3. Update Counters
+            document.getElementById('event-count').innerText = `${filteredData.length} MATCHES`;
+
+            // 4. Sort and Build
+            // Reverse so newest is at the top of the feed
+            const sortedData = [...filteredData].reverse();
+            
+            if(sortedData.length === 0) {
+                feedContainer.innerHTML = `<div class="text-center p-6 text-slate-500 text-sm">No activity found for this filter.</div>`;
+            }
+
+            sortedData.forEach((event, index) => {
+                // Map Marker
+                const marker = createMapPin(event);
+                clusterGroup.addLayer(marker);
+                activeMarkers[event.id] = marker;
+
+                // Sidebar Card
+                const isNew = highlightNewest && index === 0;
+                const card = createFeedCard(event, isNew);
+                feedContainer.appendChild(card);
+            });
+
+            // Always update Marquee (it filters for 'now' internally)
+            buildMarquee();
+        }
+
+        function ingestNewEvent(event) {
+            globalNewsData.push(event);
+            
+            // Check if the new event matches the current filter
+            if (smartFilters[currentFilter].check(event)) {
+                renderUI(true); // Animate in
+                if (event.isBreaking || event.timeContext === 'now') {
+                    map.flyTo([event.lat, event.lng], 15, { duration: 1.5 });
+                }
+            } else {
+                buildMarquee(); // Silent update to ticker
+            }
+        }
+
+        function setStatus(kind, text) {
+            const pill = document.getElementById('data-status-pill');
+            const dot = document.getElementById('data-status-dot');
+            const label = document.getElementById('data-status-text');
+            if (!pill || !dot || !label) return;
+
+            const styles = {
+                live: { dot: 'bg-emerald-400', text: 'text-emerald-400', border: 'border-emerald-500/40' },
+                fallback: { dot: 'bg-amber-400', text: 'text-amber-400', border: 'border-amber-500/40' },
+                empty: { dot: 'bg-slate-400', text: 'text-slate-300', border: 'border-slate-600' },
+                error: { dot: 'bg-red-400', text: 'text-red-400', border: 'border-red-500/40' }
+            };
+            const palette = styles[kind] || styles.live;
+
+            dot.className = `w-2 h-2 rounded-full animate-pulse ${palette.dot}`;
+            label.className = `text-[10px] font-mono tracking-wider ${palette.text}`;
+            label.textContent = text;
+            pill.className = `bg-slate-900/90 backdrop-blur-md px-4 py-2 rounded-2xl border shadow-xl flex items-center gap-2 ${palette.border}`;
+        }
+
+        function parseTimestamp(value) {
+            if (!value || typeof value !== 'string') return null;
+            const parsed = new Date(value.replace(' ', 'T'));
+            if (Number.isNaN(parsed.getTime())) return null;
+            return parsed;
+        }
+
+        function formatDisplayTime(dateObj) {
+            if (!dateObj) return 'Unknown';
+            const ageMs = Date.now() - dateObj.getTime();
+            if (ageMs < 0) return dateObj.toLocaleString();
+            const ageMin = Math.floor(ageMs / 60000);
+            if (ageMin < 1) return 'Just now';
+            if (ageMin < 60) return `${ageMin} min ago`;
+            const ageHrs = Math.floor(ageMin / 60);
+            if (ageHrs < 24) return `${ageHrs} hr${ageHrs === 1 ? '' : 's'} ago`;
+            return dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        }
+
+        function inferCategory(text) {
+            const low = (text || '').toLowerCase();
+            if (low.includes('police') || low.includes('crime') || low.includes('suspect') || low.includes('home invasion')) return 'Crime';
+            if (low.includes('road') || low.includes('highway') || low.includes('traffic') || low.includes('collision')) return 'Traffic';
+            if (low.includes('city') || low.includes('council') || low.includes('funding') || low.includes('department')) return 'Civic';
+            if (low.includes('event') || low.includes('festival') || low.includes('concert') || low.includes('market') || low.includes('match')) return 'Event';
+            return 'Alert';
+        }
+
+        function inferSentiment(text) {
+            const low = (text || '').toLowerCase();
+            if (low.includes('win') || low.includes('victory') || low.includes('approves') || low.includes('funding')) return 'positive';
+            return 'negative';
+        }
+
+        function inferBreaking(text, timestamp) {
+            const low = (text || '').toLowerCase();
+            const urgent = low.includes('alert') || low.includes('flood') || low.includes('fire') || low.includes('missing') || low.includes('home invasion');
+            const recent = timestamp && (Date.now() - timestamp.getTime() < 45 * 60000);
+            return !!(urgent || recent);
+        }
+
+        function inferTimeContext(timestamp) {
+            if (!timestamp) return 'now';
+            const ageMs = Date.now() - timestamp.getTime();
+            return ageMs <= 24 * 60 * 60 * 1000 ? 'now' : 'weekend';
+        }
+
+        function toEventFromLocation(location, briefing, index) {
+            const text = `${location.snippet || ''} ${briefing?.headline || ''} ${location.label || ''}`;
+            const timestamp = parseTimestamp(location.timestamp || briefing?.timestamp);
+            const category = inferCategory(text);
+            return {
+                id: location.id || `loc-${index}`,
+                lat: Number(location.lat) || CHICO_LAT,
+                lng: Number(location.lng) || CHICO_LNG,
+                title: briefing?.headline || location.label || 'Lantern signal',
+                category,
+                sentiment: inferSentiment(text),
+                timeContext: inferTimeContext(timestamp),
+                displayTime: formatDisplayTime(timestamp),
+                img: FALLBACK_IMAGES[index % FALLBACK_IMAGES.length],
+                isBreaking: inferBreaking(text, timestamp),
+                source: briefing?.source || location.source || 'Lantern'
+            };
+        }
+
+        function toEventFromBriefing(briefing, index) {
+            const timestamp = parseTimestamp(briefing.timestamp);
+            const text = `${briefing.headline || ''} ${briefing.preview || ''}`;
+            const category = inferCategory(text);
+            const latOffset = ((index % 5) - 2) * 0.0042;
+            const lngOffset = ((index % 7) - 3) * 0.0034;
+            return {
+                id: briefing.id || `brief-${index}`,
+                lat: CHICO_LAT + latOffset,
+                lng: CHICO_LNG + lngOffset,
+                title: briefing.headline || 'Lantern briefing',
+                category,
+                sentiment: inferSentiment(text),
+                timeContext: inferTimeContext(timestamp),
+                displayTime: formatDisplayTime(timestamp),
+                img: FALLBACK_IMAGES[index % FALLBACK_IMAGES.length],
+                isBreaking: inferBreaking(text, timestamp),
+                source: briefing.source || 'Lantern'
+            };
+        }
+
+        async function loadLiveNews() {
+            const [briefingsRes, locationsRes] = await Promise.all([
+                fetch('/api/briefings?limit=40'),
+                fetch('/api/locations')
+            ]);
+
+            if (!briefingsRes.ok || !locationsRes.ok) {
+                throw new Error(`API status ${briefingsRes.status}/${locationsRes.status}`);
+            }
+
+            const briefings = await briefingsRes.json();
+            const locations = await locationsRes.json();
+            const briefingMap = {};
+            (briefings || []).forEach(item => { briefingMap[item.id] = item; });
+
+            if (Array.isArray(locations) && locations.length > 0) {
+                return locations.map((location, index) =>
+                    toEventFromLocation(location, briefingMap[location.briefing_id], index)
+                );
+            }
+
+            return (briefings || []).map((briefing, index) => toEventFromBriefing(briefing, index));
+        }
+
+        async function boot() {
+            buildFilters();
+            try {
+                const liveEvents = await loadLiveNews();
+                if (liveEvents.length === 0) {
+                    globalNewsData = [...seedData];
+                    setStatus('empty', 'NO LIVE EVENTS');
+                } else {
+                    globalNewsData = liveEvents;
+                    setStatus('live', 'LIVE DATA');
+                }
+            } catch (err) {
+                console.error('GeoNews live load failed:', err);
+                globalNewsData = [...seedData];
+                setStatus('fallback', 'FALLBACK MODE');
+            }
+            renderUI();
+        }
+
+        // --- 5. STARTUP ---
+        boot();
+
+    </script>
+</body>
+</html>
